@@ -3,12 +3,17 @@
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <sys/ioctl.h>
 #include <termios.h>
 #include <unistd.h>
 
 /*** defines ***/
 #define CTRL_KEY(k) ((k) & 0x1f)
+#define ARROW_UP 1000
+#define ARROW_DOWN 1001
+#define ARROW_RIGHT 1002
+#define ARROW_LEFT 1003
 
 /*** data ***/
 struct termios orig_termios;
@@ -16,6 +21,8 @@ struct editorConfig
 {
     int screenrows;
     int screencols;
+    int cx;
+    int cy;
     struct termios orig_termios;
 };
 struct editorConfig E;
@@ -54,7 +61,7 @@ void enableRawMode()
         die("tcsetattr");
 }
 
-char editorReadKey()
+int editorReadKey()
 {
     int nread;
     char c;
@@ -63,6 +70,34 @@ char editorReadKey()
     {
         if (nread == -1 && errno != EAGAIN)
             die("read");
+    }
+
+    if (c == '\x1b')
+    {
+        char seq[2];
+
+        if (read(STDIN_FILENO, &seq[0], 1) != 1)
+            return '\x1b';
+
+        if (read(STDIN_FILENO, &seq[1], 1) != 1)
+            return '\x1b';
+
+        if (seq[0] == '[')
+        {
+            switch (seq[1])
+            {
+            case 'A':
+                return ARROW_UP;
+            case 'B':
+                return ARROW_DOWN;
+            case 'C':
+                return ARROW_RIGHT;
+            case 'D':
+                return ARROW_LEFT;
+            }
+        }
+
+        return '\x1b';
     }
 
     return c;
@@ -89,7 +124,6 @@ int getWindowSize(int *rows, int *cols)
 void editorDrawRows()
 {
     int y;
-
     for (y = 0; y < E.screenrows; y++)
     {
         write(STDOUT_FILENO, "~\r\n", 3);
@@ -103,14 +137,17 @@ void editorRefreshScreen()
 
     editorDrawRows();
 
-    write(STDOUT_FILENO, "\x1b[H", 3);
+    char buf[32];
+
+    snprintf(buf, sizeof(buf), "\x1b[%d;%dH", E.cy + 1, E.cx + 1);
+    write(STDOUT_FILENO, buf, strlen(buf));
 }
 
 /*** input ***/
 
 void editorProcessKeypress()
 {
-    char c = editorReadKey();
+    int c = editorReadKey();
 
     switch (c)
     {
@@ -118,6 +155,25 @@ void editorProcessKeypress()
         write(STDOUT_FILENO, "\x1b[2J", 4);
         write(STDOUT_FILENO, "\x1b[H", 3);
         exit(0);
+        break;
+    case ARROW_UP:
+        if (E.cy > 0)
+            E.cy--;
+        break;
+
+    case ARROW_DOWN:
+        if (E.cy < E.screenrows - 1)
+            E.cy++;
+        break;
+
+    case ARROW_LEFT:
+        if (E.cx > 0)
+            E.cx--;
+        break;
+
+    case ARROW_RIGHT:
+        if (E.cx < E.screencols - 1)
+            E.cx++;
         break;
     }
 }
@@ -128,6 +184,8 @@ void initEditor()
 {
     if (getWindowSize(&E.screenrows, &E.screencols) == -1)
         die("getWindowSize");
+    E.cx = 0;
+    E.cy = 0;
 }
 
 int main()
@@ -140,6 +198,5 @@ int main()
         editorRefreshScreen();
         editorProcessKeypress();
     }
-
     return 0;
 }
